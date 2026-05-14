@@ -34,3 +34,11 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Data and Artifacts
+data/
+plots/
+*.parquet
+*.csv
+*.jsonl
+
