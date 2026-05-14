@@ -68,6 +68,15 @@ def perform_aggregation(df):
     print(summary)
     return summary
 
+def save_to_parquet(df):
+    print("\n--- Task 7: Saving to Parquet ---")
+    output_path = "data/processed/transactions.parquet"
+    
+    # Save the cleaned DataFrame to Parquet format
+    df.write_parquet(output_path)
+    
+    print(f"Successfully saved cleaned data to {output_path}")
+
 if __name__ == "__main__":
     # Task 4: Import
     df_raw = import_data()
@@ -79,5 +88,8 @@ if __name__ == "__main__":
         
         # Task 6: Aggregate
         df_summary = perform_aggregation(df_cleaned)
+        
+        # Task 7: Save to Parquet
+        save_to_parquet(df_cleaned)
 
 
