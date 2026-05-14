@@ -18,13 +18,11 @@ def clean_data(df):
     initial_count = df.shape[0]
     
     # Step 1: Remove duplicates based on transaction_id
-    # We keep the first occurrence and remove subsequent duplicates
     df = df.unique(subset=["transaction_id"])
     after_dup_count = df.shape[0]
     print(f"1. Removed duplicates: {initial_count - after_dup_count} rows removed.")
 
     # Step 2: Handle missing values
-    # A. Fill empty/null categories with 'Other'
     df = df.with_columns(
         pl.when(pl.col("category").is_null() | (pl.col("category") == ""))
         .then(pl.lit("Other"))
@@ -32,8 +30,6 @@ def clean_data(df):
         .alias("category")
     )
     
-    # B. Handle missing amounts
-    # In our Go collector, empty amounts became 0.0. We treat 0.0 as missing for this lab.
     median_amount = df.filter(pl.col("amount") != 0).select(pl.col("amount").median()).item()
     df = df.with_columns(
         pl.when(pl.col("amount") == 0)
@@ -44,7 +40,6 @@ def clean_data(df):
     print(f"2. Handled missing values: Categories filled with 'Other', Amounts filled with median ({median_amount:.2f}).")
 
     # Step 3: Type casting
-    # Convert timestamp string to Datetime
     df = df.with_columns(
         pl.col("timestamp").str.to_datetime()
     )
@@ -52,6 +47,26 @@ def clean_data(df):
 
     print(f"\nCleaning complete. Final row count: {df.shape[0]}")
     return df
+
+def perform_aggregation(df):
+    print("\n--- Task 6: Aggregation Analysis ---")
+    
+    # Group by category and calculate SUM, AVG, MIN, MAX, COUNT
+    summary = (
+        df.group_by("category")
+        .agg([
+            pl.col("amount").sum().alias("total_amount"),
+            pl.col("amount").mean().alias("avg_amount"),
+            pl.col("amount").min().alias("min_amount"),
+            pl.col("amount").max().alias("max_amount"),
+            pl.len().alias("transaction_count")
+        ])
+        .sort("total_amount", descending=True)
+    )
+    
+    print("\nSummary by Category:")
+    print(summary)
+    return summary
 
 if __name__ == "__main__":
     # Task 4: Import
@@ -62,8 +77,7 @@ if __name__ == "__main__":
         # Task 5: Clean
         df_cleaned = clean_data(df_raw)
         
-        print("\nCleaned Data Preview:")
-        print(df_cleaned.head(5))
-        print("\nCleaned Schema:")
-        print(df_cleaned.schema)
+        # Task 6: Aggregate
+        df_summary = perform_aggregation(df_cleaned)
+
 
