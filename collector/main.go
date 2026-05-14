@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -26,18 +29,22 @@ const (
 	InputFile    = "../data/raw/transactions.csv"
 	OutputFile   = "../data/intermediate/transactions.jsonl"
 	WorkerCount  = 4
-	BatchSize    = 100               // N: Max records before flush
-	BatchTimeout = 2 * time.Second   // T: Max time before flush
+	BatchSize    = 100
+	BatchTimeout = 2 * time.Second
 )
 
 func main() {
-	log.Println("Starting Task 2: Buffered Go Collector...")
+	log.Println("Starting Task 3: Graceful Shutdown Collector...")
+
+	// Create a cancellable context based on OS signals
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	linesChan := make(chan []string, 100)
 	resultsChan := make(chan Transaction, 100)
-	doneChan := make(chan struct{})
-	
-	// 1. Reader Goroutine
+	writerDone := make(chan struct{})
+
+	// 1. Reader Goroutine: Reads CSV and respects context cancellation
 	go func() {
 		defer close(linesChan)
 		file, err := os.Open(InputFile)
@@ -52,25 +59,33 @@ func main() {
 		}
 
 		for {
-			record, err := reader.Read()
-			if err == io.EOF {
-				break
+			select {
+			case <-ctx.Done():
+				log.Println("Reader received shutdown signal. Stopping read...")
+				return
+			default:
+				record, err := reader.Read()
+				if err == io.EOF {
+					return
+				}
+				if err != nil {
+					log.Printf("Error reading CSV line: %v", err)
+					continue
+				}
+				linesChan <- record
 			}
-			if err != nil {
-				log.Printf("Error reading CSV line: %v", err)
-				continue
-			}
-			linesChan <- record
 		}
 	}()
 
-	// 2. Worker Pool
+	// 2. Worker Pool: Processes lines and respects context
 	var wg sync.WaitGroup
 	for i := 0; i < WorkerCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for line := range linesChan {
+				// Even if context is cancelled, we process the lines already in the channel
+				// to avoid losing data that was already read.
 				if len(line) < 7 {
 					continue
 				}
@@ -93,8 +108,9 @@ func main() {
 		close(resultsChan)
 	}()
 
-	// 3. Buffered Batch Writer (Task 2 implementation)
+	// 3. Buffered Batch Writer: Handles final flush and shutdown
 	go func() {
+		defer close(writerDone)
 		outFile, err := os.Create(OutputFile)
 		if err != nil {
 			log.Fatalf("Failed to create output file: %v", err)
@@ -122,7 +138,7 @@ func main() {
 			case tx, ok := <-resultsChan:
 				if !ok {
 					flush()
-					close(doneChan)
+					log.Println("Writer: All data processed, final flush completed.")
 					return
 				}
 				buffer = append(buffer, tx)
@@ -131,10 +147,26 @@ func main() {
 				}
 			case <-ticker.C:
 				flush()
+			case <-ctx.Done():
+				// IMPORTANT: When context is cancelled, we must still empty the resultsChan
+				// to ensure we don't lose data that workers already processed.
+				log.Println("Writer received shutdown signal. Cleaning up remaining records...")
+				
+				// Drain the remaining results channel
+				for tx := range resultsChan {
+					buffer = append(buffer, tx)
+					if len(buffer) >= BatchSize {
+						flush()
+					}
+				}
+				flush()
+				log.Println("Writer: Graceful shutdown complete.")
+				return
 			}
 		}
 	}()
 
-	<-doneChan
-	log.Println("Task 2 complete. Buffered processing finished.")
+	// Wait for the writer to finish regardless of how it was triggered
+	<-writerDone
+	log.Println("Program exited cleanly.")
 }
